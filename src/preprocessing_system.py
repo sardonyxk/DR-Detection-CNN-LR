@@ -13,7 +13,7 @@ class StorageManager:
     def __init__(self, base_output_dir):
         self.base_dir = base_output_dir
         self.folders = [
-            "Resized", "Cropped", "Green_Channel", "Denoised", 
+            "Resized", "Cropped", "Denoised", 
             "Enhanced", "Corrected", "Normalized", "Sharpened", 
             "Augmented", "Final_Output", "Reports"
         ]
@@ -79,13 +79,7 @@ class RetinalPreprocessor:
         results['Cropped'] = img.copy()
 
         # 5. Extract Channel
-        if config.get('channel') == 'Green':
-            img = img[:, :, 1]
-        elif config.get('channel') == 'Grayscale':
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        results['Green_Channel'] = img.copy()
-
-        is_single_channel = len(img.shape) == 2
+        # Not necessary
 
         # 6. Denoise
         if config.get('denoise') == 'Median':
@@ -166,7 +160,6 @@ output_dir = st.sidebar.text_input("Output Folder Path:", "workspace/output")
 
 st.sidebar.header("2. Preprocessing Controls")
 img_size = st.sidebar.slider("Resize Resolution", 128, 512, 224)
-channel_opt = st.sidebar.selectbox("Color Extraction", ["Green", "Grayscale", "RGB"])
 denoise_opt = st.sidebar.selectbox("Noise Removal", ["Median", "Gaussian", "None"])
 enhance_opt = st.sidebar.selectbox("Contrast Enhancement", ["CLAHE", "None"])
 apply_illum = st.sidebar.checkbox("Apply Illumination Correction", value=True)
@@ -267,7 +260,7 @@ if st.button("Start Processing Pipeline", type="primary"):
         pd.DataFrame(rejected_data).to_csv(os.path.join(report_dir, "rejected_images.csv"), index=False)
 
     st.markdown("---")
-    st.subheader("📊 Processing Summary")
+    st.subheader("Processing Summary")
     st.write(f"**Total Images Scanned:** {total_files}")
     st.write(f"**Successfully Processed:** {len(log_data)}")
     st.write(f"**Rejected Images:** {len(rejected_data)}")
