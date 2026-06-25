@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore")
 import tensorflow as tf
 
 # ---------------------------------------------------------------------------
-# Import your three existing modules
+# Import three existing modules
 # ---------------------------------------------------------------------------
 # If they live in a sub-package, adjust the import paths accordingly.
 from cnn_model    import build_cnn_feature_extractor
