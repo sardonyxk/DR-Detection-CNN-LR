@@ -22,7 +22,7 @@ import tensorflow as tf
 # ---------------------------------------------------------------------------
 # If they live in a sub-package, adjust the import paths accordingly.
 from cnn_model    import build_cnn_feature_extractor
-from lr_classifier import train_lr, predict_lr, save_lr
+from classifier_lr import train_lr, predict_lr, save_lr
 from evaluation   import evaluate_model
 
 # ---------------------------------------------------------------------------
