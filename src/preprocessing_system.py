@@ -1,18 +1,3 @@
-"""
-=============================================================================
-Diabetic Retinopathy Detection System
-Retinal Fundus Image Preprocessing Pipeline
-=============================================================================
-Pipeline:
-  Raw Image → Validation → Resize (224×224) → RGB Conversion
-           → Normalization (0–1, float32) → Augmentation → Save
-
-Supported formats : JPG, JPEG, PNG, BMP
-Output layout     : mirrors input class-folder structure
-Dependencies      : opencv-python, numpy (both ship with most ML environments)
-=============================================================================
-"""
-
 import os
 import sys
 import warnings
@@ -42,20 +27,7 @@ SHIFT_RANGE       = 0.05               # fraction of image dimension
 # Step 1 – Image Validation
 # ---------------------------------------------------------------------------
 def validate_image(image_path: str) -> bool:
-    """
-    Check that a file exists, has a supported extension, and can be decoded.
-
-    Parameters
-    ----------
-    image_path : str
-        Absolute or relative path to the candidate image file.
-
-    Returns
-    -------
-    bool
-        True  → file is a valid, readable image.
-        False → file is missing, unsupported, or corrupted.
-    """
+    
     path = Path(image_path)
 
     # 1a. Extension check
@@ -86,25 +58,6 @@ def validate_image(image_path: str) -> bool:
 # Step 2-4 – Core preprocessing (resize → RGB → normalize)
 # ---------------------------------------------------------------------------
 def preprocess_image(image: np.ndarray) -> np.ndarray:
-    """
-    Apply the core preprocessing pipeline to a single image array.
-
-    Steps performed
-    ---------------
-    1. Resize  : to TARGET_SIZE using Lanczos interpolation.
-    2. RGB     : convert BGR (OpenCV default) → RGB; handle grayscale inputs.
-    3. Normalize: cast to float32 and scale pixel values to [0.0, 1.0].
-
-    Parameters
-    ----------
-    image : np.ndarray
-        Raw image array as loaded by cv2.imread (BGR, uint8).
-
-    Returns
-    -------
-    np.ndarray
-        Processed image: shape (224, 224, 3), dtype float32, values in [0, 1].
-    """
 
     # --- Step 2: Resize ---------------------------------------------------
     # INTER_LANCZOS4 preserves fine retinal vessel details better than
@@ -143,24 +96,6 @@ def _float_to_uint8(img: np.ndarray) -> np.ndarray:
 
 
 def augment_image(image: np.ndarray) -> dict:
-    """
-    Generate a set of augmented variants from a preprocessed image.
-
-    All transformations are deliberately conservative so that diagnostic
-    features of retinal fundus images (optic disc, blood vessels, lesions)
-    remain intact and recognisable.
-
-    Parameters
-    ----------
-    image : np.ndarray
-        Preprocessed image: float32, shape (224, 224, 3), values in [0, 1].
-
-    Returns
-    -------
-    dict
-        Mapping of suffix → augmented image (same dtype/shape as input).
-        Keys: 'flip', 'rot15', 'rot-15', 'zoom', 'bright', 'shift'
-    """
     h, w = image.shape[:2]
     augmented = {}
 
@@ -242,18 +177,7 @@ def augment_image(image: np.ndarray) -> dict:
 # Step 6 – Save helper
 # ---------------------------------------------------------------------------
 def save_image(image: np.ndarray, output_path: str) -> bool:
-    """
-    Save a float32 [0,1] image to disk as a PNG (lossless).
-
-    Parameters
-    ----------
-    image       : float32 ndarray, values in [0, 1], shape (H, W, 3).
-    output_path : destination file path (directories are created if absent).
-
-    Returns
-    -------
-    bool : True on success, False on failure.
-    """
+    
     try:
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -278,25 +202,6 @@ def save_image(image: np.ndarray, output_path: str) -> bool:
 # Master pipeline – process entire dataset
 # ---------------------------------------------------------------------------
 def process_dataset(input_folder: str, output_folder: str) -> dict:
-    """
-    Walk *input_folder*, preprocess every valid retinal image, generate
-    augmented variants, and write results to *output_folder* mirroring the
-    original class-folder hierarchy.
-
-    Parameters
-    ----------
-    input_folder  : Root directory of the raw dataset.
-    output_folder : Root directory for the processed dataset.
-
-    Returns
-    -------
-    dict with summary statistics:
-        total_found      – files discovered with supported extensions
-        processed_ok     – images successfully preprocessed
-        augmented_saved  – augmented variants written to disk
-        corrupted_skip   – files that failed validation
-        save_errors      – images that passed preprocessing but failed on save
-    """
     input_root  = Path(input_folder)
     output_root = Path(output_folder)
 
@@ -431,19 +336,7 @@ def process_dataset(input_folder: str, output_folder: str) -> dict:
 # Utility: quick single-image preview (useful during development)
 # ---------------------------------------------------------------------------
 def preprocess_single(image_path: str, output_path: str) -> bool:
-    """
-    Convenience wrapper: validate, preprocess, and save ONE image.
-    No augmentation is applied – useful for inspecting pipeline output.
 
-    Parameters
-    ----------
-    image_path  : path to a raw retinal image.
-    output_path : where to save the processed result.
-
-    Returns
-    -------
-    bool : True on success.
-    """
     if not validate_image(image_path):
         return False
 
