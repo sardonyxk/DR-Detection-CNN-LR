@@ -16,9 +16,19 @@ warnings.filterwarnings("ignore")
 
 import tensorflow as tf
 
+<<<<<<< HEAD
 from model_cnn     import build_cnn_feature_extractor  # CNN architecture only
 from classifier_lr import train_lr, predict_lr, save_lr # LR train/predict/save
 from evaluate    import evaluate_model                 # metrics & printing
+=======
+# ---------------------------------------------------------------------------
+# Import three existing modules
+# ---------------------------------------------------------------------------
+# If they live in a sub-package, adjust the import paths accordingly.
+from cnn_model    import build_cnn_feature_extractor
+from classifier_lr import train_lr, predict_lr, save_lr
+from evaluation   import evaluate_model
+>>>>>>> e58da243e0506956ca5c2819f69ac8de8c07bd81
 
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
