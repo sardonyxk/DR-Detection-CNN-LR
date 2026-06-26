@@ -23,7 +23,7 @@ def evaluate_model(
         )
     accuracy = accuracy_score(y_true, y_pred)
 
-    report = classification_report(
+    report_str = classification_report(
         y_true,
         y_pred,
         target_names=CLASS_NAMES,
@@ -47,7 +47,7 @@ def evaluate_model(
     print("  Classification Report")
     print("  " + "-" * 63)
     
-    for line in report.splitlines():
+    for line in report_str.splitlines():
         print(f"  {line}")
 
     # 3. Confusion matrix — plain text grid, rows = true, columns = predicted
@@ -57,7 +57,7 @@ def evaluate_model(
 
     
     col_labels = "".join(f"  [{i}]" for i in range(len(CLASS_NAMES)))
-    print(f"  {'':>18}{col_labels}")
+    print(f"  {'':>18}{col_labels}")    
 
     
     for true_idx, row in enumerate(cm):
@@ -69,6 +69,6 @@ def evaluate_model(
 
     return {
         "accuracy":              accuracy,
-        "classification_report": report,
+        "classification_report": report_str,
         "confusion_matrix":      cm,
     }

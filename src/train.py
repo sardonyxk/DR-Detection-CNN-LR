@@ -15,7 +15,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"   # suppress TF info/warning logs
 warnings.filterwarnings("ignore")
 
 import tensorflow as tf
-    
+
 from model_cnn     import build_cnn_feature_extractor  # CNN architecture only
 from classifier_lr import train_lr, predict_lr, save_lr # LR train/predict/save
 from evaluate    import evaluate_model                 # metrics & printing
@@ -28,7 +28,7 @@ TARGET_SIZE = (224, 224)       # (H, W) — matches CNN Input(shape=(224,224,3))
 INPUT_SHAPE = (224, 224, 3)    # passed to build_cnn_feature_extractor()
 SUPPORTED   = {".jpg", ".jpeg", ".png", ".bmp"}
 
-EXPECTED_FEATURE_DIM = 100352   
+EXPECTED_FEATURE_DIM = 256 
 
 CLASS_MAP = {               
     "No_DR"           : 0,
@@ -151,8 +151,47 @@ def split_dataset(
 
     return X_train, X_val, X_test, y_train, y_val, y_test
 
+#Step 3: CNN training
+def train_cnn(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    batch_size: int,
+    epochs: int = 20,
+) -> tf.keras.Model:
 
-# STEP 3 — CNN Feature Extraction
+    print(f"\n{'='*65}")
+    print("  STEP 3 — CNN Training (Adam Optimizer)")
+    print(f"{'='*65}")
+
+    #Build CNN feature extractor model
+    cnn = build_cnn_feature_extractor(input_shape=INPUT_SHAPE)
+    
+    #Temporay classification head
+    model=tf.keras.Sequential([
+        cnn,
+        tf.keras.layers.Dense(5, activation='softmax', name="classifier")
+    ])
+    
+    #compile
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    #Train
+    model.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        batch_size=batch_size,
+        epochs=epochs,
+        verbose=1
+    )
+    print("\n  CNN training complete.")
+    return cnn
+
+# STEP 4 — CNN Feature Extraction
 
 
 def _extract_split(
@@ -171,7 +210,7 @@ def _extract_split(
     for i in range(n_batches):
         start = i * batch_size
         end   = min(start + batch_size, n)
-        feats = cnn.predict(X[start:end], verbose=0)   # (B, 100352)
+        feats = cnn.predict(X[start:end], verbose=0)   # (B, 256)
         features.append(feats)
 
         done = int(30 * end / n)
@@ -183,9 +222,10 @@ def _extract_split(
 
 
 def extract_all_features(
-    X_train:    np.ndarray,
-    X_val:      np.ndarray,
-    X_test:     np.ndarray,
+    cnn: tf.keras.Model,
+    X_train: np.ndarray,
+    X_val: np.ndarray,
+    X_test: np.ndarray,
     batch_size: int,           # passed from args.batch_size — no silent default
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     print(f"\n{'='*65}")
@@ -193,7 +233,7 @@ def extract_all_features(
     print(f"{'='*65}")
 
     # Build once — reused for all three splits to avoid redundant graph construction
-    cnn = build_cnn_feature_extractor(input_shape=INPUT_SHAPE)
+
 
     t0      = time.time()
     F_train = _extract_split(cnn, X_train, batch_size, "Train")
@@ -296,6 +336,7 @@ def run_evaluation(
 # STEP 7 — Save Artefacts
 
 def save_artefacts(
+    cnn: tf.keras.Model,
     lr_model,
     scaler:     StandardScaler,
     metrics:    dict,
@@ -308,6 +349,11 @@ def save_artefacts(
     print(f"  STEP 7 — Saving Artefacts  →  {out.resolve()}")
     print(f"{'='*65}")
 
+    #CNN Model
+    cnn_path = out / "cnn.keras"
+    cnn.save(cnn_path)
+    print(f"  [OK] CNN model       → {cnn_path}")
+    
     # LR model — uses save_lr() from classifier_lr.py
     lr_path = out / "lr_model.joblib"
     save_lr(lr_model, str(lr_path))
@@ -387,10 +433,16 @@ def main() -> None:
     del X   # free ~N×224×224×3×4 bytes — no longer needed
 
     #Step 3: CNN forward pass — pure inference, no CNN training
-    F_train, F_val, F_test = extract_all_features(
-        X_train, X_val, X_test,
-        batch_size=args.batch_size,   # propagated from CLI — not a silent default
+    #Step 3A - Train CNN
+    cnn= train_cnn(
+        X_train, y_train, X_val, y_val, batch_size=args.batch_size
     )
+    
+    #Step 3B - Extract features
+    F_train, F_val, F_test = extract_all_features(
+        cnn, X_train, X_val, X_test, batch_size=args.batch_size
+    )
+    
     del X_train, X_val, X_test   # free image arrays — features are all we need
 
     #Step 4: Scale features (fit on train, transform all)
@@ -404,7 +456,7 @@ def main() -> None:
     metrics = run_evaluation(lr_model, F_val_s, y_val, F_test_s, y_test)
 
     #Step 7: Save LR model, scaler, and text report
-    save_artefacts(lr_model, scaler, metrics, output_dir=args.output_dir)
+    save_artefacts(cnn, lr_model, scaler, metrics, output_dir=args.output_dir)
 
     #Final summary
     mins, secs = divmod(int(time.time() - t_start), 60)

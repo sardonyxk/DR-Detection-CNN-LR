@@ -6,7 +6,9 @@ from tensorflow.keras.layers import (
     Conv2D,
     MaxPooling2D,
     BatchNormalization,
-    Flatten,)
+    Flatten,
+    Dense,
+    Dropout,)
 
 np.random.seed(42)
 tf.random.set_seed(42)
@@ -81,6 +83,15 @@ def build_cnn_feature_extractor(input_shape=(224, 224, 3))-> Sequential:
     #Flatten Layer
     #Expected output: (28*28*128,) = (100352,)
     model.add(Flatten(name="flatten"))
+    
+    #Feature extraction layer
+    model.add(Dense(
+        units=256,
+        activation="relu",
+        name="feature_dense"
+    ))
+    model.add(Dropout(0.5, name="dropout"))
+    
     return model
 
 if __name__ == "__main__":
@@ -95,7 +106,7 @@ if __name__ == "__main__":
     model.summary()
     
     
-    expected_features = 28 * 28 * 128
+    expected_features = 256
     actual_features = model.output_shape[-1]
     
     print("\n" + "=" * 65)

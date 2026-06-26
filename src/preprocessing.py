@@ -6,6 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pandas as pd
 
 warnings.filterwarnings("ignore")  # suppress low-level codec warnings
 
@@ -162,12 +163,16 @@ def augment_image(image: np.ndarray) -> dict:
     # ------------------------------------------------------------------ #
     tx = np.random.uniform(-SHIFT_RANGE, SHIFT_RANGE) * w  # pixels
     ty = np.random.uniform(-SHIFT_RANGE, SHIFT_RANGE) * h
-    M_shift = np.float32([[1, 0, tx], [0, 1, ty]])
+    M_shift = np.array(
+        [[1.0, 0.0, tx],
+         [0.0, 1.0, ty]],
+        dtype=np.float32    
+    )
     shifted = cv2.warpAffine(
         image, M_shift, (w, h),
         flags=cv2.INTER_LANCZOS4,
         borderMode=cv2.BORDER_REFLECT_101
-    )
+    ) 
     augmented["shift"] = shifted
 
     return augmented
@@ -204,6 +209,24 @@ def save_image(image: np.ndarray, output_path: str) -> bool:
 def process_dataset(input_folder: str, output_folder: str) -> dict:
     input_root  = Path(input_folder)
     output_root = Path(output_folder)
+    
+    #Read CSV containing labels
+    csv_path = input_root / "FP.csv"
+    
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+    
+    df=pd.read_csv(csv_path)
+    
+    #Map numeric grades to folder names
+    
+    grade_map = {
+        0: "No_DR",
+        1: "Mild",
+        2: "Moderate",
+        3: "Severe",
+        4: "Proliferative_DR"
+    }
 
     if not input_root.is_dir():
         raise FileNotFoundError(f"Input folder not found: {input_folder}")
@@ -219,11 +242,19 @@ def process_dataset(input_folder: str, output_folder: str) -> dict:
         "save_errors"    : 0,
     }
 
-    # Collect all candidate files (recursive walk)
-    all_files = [
-        p for p in input_root.rglob("*")
-        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS
-    ]
+    # Collect image paths and their class labels from the csv
+    all_files = []
+    
+    for _, row in df.iterrows():
+        image_path= input_root / row['image']
+        
+        if image_path.suffix.lower() not in SUPPORTED_EXTS:
+            continue
+        
+        class_name=grade_map[row['grade']]
+        
+        all_files.append((image_path, class_name))
+        
     stats["total_found"] = len(all_files)
 
     if stats["total_found"] == 0:
@@ -240,7 +271,7 @@ def process_dataset(input_folder: str, output_folder: str) -> dict:
 
     start_time = time.time()
 
-    for idx, img_path in enumerate(all_files, start=1):
+    for idx, (img_path, class_name) in enumerate(all_files, start=1):
 
         # Progress indicator every 10 images (or always for small datasets)
         if idx % 10 == 0 or idx == 1 or idx == stats["total_found"]:
@@ -273,13 +304,11 @@ def process_dataset(input_folder: str, output_folder: str) -> dict:
             stats["corrupted_skip"] += 1
             continue
 
-        # ------------------------------------------------------------------
-        # Build mirrored output path (preserve class-folder structure)
+       
         # relative_path = class_folder / filename
-        # ------------------------------------------------------------------
-        relative = img_path.relative_to(input_root)
+    
         stem     = img_path.stem              # filename without extension
-        out_dir  = output_root / relative.parent  # e.g. Processed/Mild/
+        out_dir  = output_root / class_name  
 
         # ------------------------------------------------------------------
         # Step 6a: Save original processed image
@@ -364,7 +393,7 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     # CONFIGURATION – edit these two paths before running
     # -----------------------------------------------------------------------
-    INPUT_FOLDER  = "Dataset"            # folder with raw fundus images
+    INPUT_FOLDER  = "Data"            # folder with raw fundus images
     OUTPUT_FOLDER = "Processed_Dataset"  # destination for processed images
     # -----------------------------------------------------------------------
 
