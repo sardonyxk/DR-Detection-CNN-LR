@@ -5,6 +5,7 @@ import argparse
 import warnings
 from pathlib import Path
 
+from matplotlib.pyplot import bar
 import numpy as np
 import cv2
 import joblib
@@ -57,17 +58,17 @@ def load_image(path: Path) -> np.ndarray | None:
 
     return img.astype(np.float32) / 255.0
 
-
-def load_dataset(data_dir: str) -> tuple[np.ndarray, np.ndarray]:
+def load_dataset(data_dir: str) -> tuple[list[Path], np.ndarray]:
     root = Path(data_dir)
+
     if not root.is_dir():
         raise FileNotFoundError(
             f"Data directory not found: {root.resolve()}\n"
-            "Run preprocessing.py first to create it."   # fixed filename
+            "Run preprocessing.py first to create it."
         )
 
-    images, labels = [], []
-    skipped        = 0
+    image_paths = []
+    labels = []
 
     print(f"\n{'='*65}")
     print(f"  STEP 1 — Loading dataset from: {root.resolve()}")
@@ -75,81 +76,69 @@ def load_dataset(data_dir: str) -> tuple[np.ndarray, np.ndarray]:
 
     for class_name, label in CLASS_MAP.items():
         class_dir = root / class_name
+
         if not class_dir.is_dir():
-            print(f"  [WARN] Class folder missing — skipping: {class_name}")
+            print(f"  [WARN] Missing class folder: {class_name}")
             continue
 
         files = [
             f for f in class_dir.iterdir()
             if f.is_file() and f.suffix.lower() in SUPPORTED
         ]
+
         print(f"  {class_name:<22}  {len(files):>5} file(s)")
 
         for fpath in files:
-            img = load_image(fpath)
-            if img is None:
-                skipped += 1
-                continue
-            images.append(img)
+            image_paths.append(fpath)
             labels.append(label)
 
-    if not images:
-        raise RuntimeError(
-            "No images were loaded. Verify that Processed_Dataset/ "
-            "contains class sub-folders with supported image files."
-        )
+    labels = np.array(labels, dtype=np.int32)
 
-    X = np.array(images, dtype=np.float32)   # (N, 224, 224, 3)
-    y = np.array(labels, dtype=np.int32)      # (N,)
+    print(f"\n  Total images : {len(image_paths):>6}")
+    print(f"  Labels       : {len(labels):>6}")
 
-    print(f"\n  Total loaded  : {len(X):>6}")
-    print(f"  Skipped       : {skipped:>6}")
-    print(f"  Shape X       : {X.shape}")
-    print(f"  Label range   : {y.min()} – {y.max()}")
-
-    return X, y
+    return image_paths, labels
 
 
 # STEP 2 — Train / Validation / Test Split
 
+from sklearn.model_selection import train_test_split
+
 def split_dataset(
-    X:         np.ndarray,
-    y:         np.ndarray,
-    val_size:  float = 0.15,
+    image_paths: list,
+    labels: np.ndarray,
+    val_size: float = 0.15,
     test_size: float = 0.15,
-) -> tuple:
+):
     print(f"\n{'='*65}")
-    print(f"  STEP 2 — Splitting dataset")
+    print(f"  STEP 2 — Splitting dataset (PATH-BASED)")
     print(f"{'='*65}")
 
-    # 1. Test split
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y,
-        test_size=test_size,
-        stratify=y,
-        random_state=RANDOM_SEED,
+    # Step 1: train + temp split
+    train_paths, temp_paths, y_train, y_temp = train_test_split(
+        image_paths,
+        labels,
+        test_size=(val_size + test_size),
+        stratify=labels,
+        random_state=42
     )
 
-    # 2. Val split — rescale fraction to the reduced pool
-    val_fraction = val_size / (1.0 - test_size)
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp,
-        test_size=val_fraction,
+    # Step 2: split temp → val + test
+    val_ratio = val_size / (val_size + test_size)
+
+    val_paths, test_paths, y_val, y_test = train_test_split(
+        temp_paths,
+        y_temp,
+        test_size=(1 - val_ratio),
         stratify=y_temp,
-        random_state=RANDOM_SEED,
+        random_state=42
     )
 
-    n = len(X)
-    print(f"  Train      : {len(X_train):>5}  ({len(X_train)/n*100:.1f} %)")
-    print(f"  Validation : {len(X_val):>5}  ({len(X_val)/n*100:.1f} %)")
-    print(f"  Test       : {len(X_test):>5}  ({len(X_test)/n*100:.1f} %)")
+    print(f"  Train      : {len(train_paths):>6}")
+    print(f"  Validation : {len(val_paths):>6}")
+    print(f"  Test       : {len(test_paths):>6}")
 
-    print(f"\n  Train class distribution:")
-    unique, counts = np.unique(y_train, return_counts=True)
-    for cls_idx, cnt in zip(unique, counts):
-        print(f"    [{cls_idx}] {CLASS_NAMES[cls_idx]:<22}  {cnt:>4}")
-
-    return X_train, X_val, X_test, y_train, y_val, y_test
+    return train_paths, val_paths, test_paths, y_train, y_val, y_test
 
 #Step 3: CNN training
 def train_cnn(
@@ -195,70 +184,73 @@ def train_cnn(
 
 
 def _extract_split(
-    cnn:        tf.keras.Model,
-    X:          np.ndarray,
+    cnn: tf.keras.Model,
+    image_paths: list,
+    labels: np.ndarray,
     batch_size: int,
     split_name: str = "",
-) -> np.ndarray:
-    n         = len(X)
-    features  = []
-    n_batches = (n + batch_size - 1) // batch_size
-    tag       = f"[{split_name}] " if split_name else ""
+) -> tuple[np.ndarray, np.ndarray]:
 
-    print(f"  {tag}Extracting {n} images in {n_batches} batch(es) ...")
+    n = len(image_paths)
+    features = []
+    y_batch = []
+
+    n_batches = (n + batch_size - 1) // batch_size
+    tag = f"[{split_name}] " if split_name else ""
+
+    print(f"  {tag}Extracting {n} images in {n_batches} batches ...")
 
     for i in range(n_batches):
         start = i * batch_size
-        end   = min(start + batch_size, n)
-        feats = cnn.predict(X[start:end], verbose=0)   # (B, 256)
+        end = min(start + batch_size, n)
+
+        batch_paths = image_paths[start:end]
+        batch_labels = labels[start:end]
+
+        batch_images = []
+
+        for path in batch_paths:
+            img = load_image(path)
+            batch_images.append(img)
+
+        batch_images = np.array(batch_images, dtype=np.float32)
+
+        feats = cnn.predict(batch_images, verbose=0)
+
         features.append(feats)
+        y_batch.append(batch_labels)
 
-        done = int(30 * end / n)
-        bar  = "█" * done + "░" * (30 - done)
-        print(f"  {tag}[{bar}] {end/n*100:5.1f}%  ({end}/{n})", end="\r")
+        print(f"{tag}Processed {end}/{n} ({end/n*100:.1f}%)")
 
-    print()   # newline after progress bar
-    return np.vstack(features).astype(np.float32)
+    print()
+
+    return np.vstack(features), np.concatenate(y_batch)
 
 
 def extract_all_features(
     cnn: tf.keras.Model,
-    X_train: np.ndarray,
-    X_val: np.ndarray,
-    X_test: np.ndarray,
-    batch_size: int,           # passed from args.batch_size — no silent default
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    train_paths: list,
+    val_paths: list,
+    test_paths: list,
+    y_train: np.ndarray,
+    y_val: np.ndarray,
+    y_test: np.ndarray,
+    batch_size: int,
+):
     print(f"\n{'='*65}")
-    print(f"  STEP 3 — CNN Feature Extraction")
+    print(f"  STEP 3 — CNN Feature Extraction (STREAMING)")
     print(f"{'='*65}")
 
-    # Build once — reused for all three splits to avoid redundant graph construction
+    F_train, y_train = _extract_split(cnn, train_paths, y_train, batch_size, "Train")
+    F_val, y_val     = _extract_split(cnn, val_paths,   y_val,   batch_size, "Val")
+    F_test, y_test   = _extract_split(cnn, test_paths,  y_test,  batch_size, "Test")
 
+    print(f"\n  Feature shapes:")
+    print(f"  Train: {F_train.shape}")
+    print(f"  Val  : {F_val.shape}")
+    print(f"  Test : {F_test.shape}")
 
-    t0      = time.time()
-    F_train = _extract_split(cnn, X_train, batch_size, "Train")
-    F_val   = _extract_split(cnn, X_val,   batch_size, "Val  ")
-    F_test  = _extract_split(cnn, X_test,  batch_size, "Test ")
-    
-    #Verify CNN output dimension
-    assert F_train.shape[1] == EXPECTED_FEATURE_DIM, (
-        f"Expected {EXPECTED_FEATURE_DIM} features, got {F_train.shape[1]}"
-    )
-    assert F_val.shape[1] == EXPECTED_FEATURE_DIM, (
-        f"Expected {EXPECTED_FEATURE_DIM} features, got {F_val.shape[1]}"
-    )
-    assert F_test.shape[1] == EXPECTED_FEATURE_DIM, (
-        f"Expected {EXPECTED_FEATURE_DIM} features, got {F_test.shape[1]}"
-    )
-
-    elapsed = time.time() - t0  
-
-    print(f"\n  Done in {elapsed:.1f}s")
-    print(f"  F_train : {F_train.shape}")
-    print(f"  F_val   : {F_val.shape}")
-    print(f"  F_test  : {F_test.shape}")
-
-    return F_train, F_val, F_test
+    return F_train, F_val, F_test, y_train, y_val, y_test
 
 
 # STEP 4 — Feature Scaling
@@ -423,42 +415,56 @@ def main() -> None:
 
     t_start = time.time()
 
-    #Step 1: Load preprocessed images from disk
-    X, y = load_dataset(args.data_dir)
+    # STEP 1: Load image paths + labels
+    image_paths, y = load_dataset(args.data_dir)
 
-    #Step 2: Stratified 70 / 15 / 15 split (or as configured)
-    X_train, X_val, X_test, y_train, y_val, y_test = split_dataset(
-        X, y, val_size=args.val_size, test_size=args.test_size,
+    # STEP 2: Split paths (NOT images)
+    train_paths, val_paths, test_paths, y_train, y_val, y_test = split_dataset(
+        image_paths, y,
+        val_size=args.val_size,
+        test_size=args.test_size,
     )
-    del X   # free ~N×224×224×3×4 bytes — no longer needed
 
-    #Step 3: CNN forward pass — pure inference, no CNN training
-    #Step 3A - Train CNN
-    cnn= train_cnn(
-        X_train, y_train, X_val, y_val, batch_size=args.batch_size
+    # STEP 3: Train CNN (feature extractor)
+    cnn = train_cnn(
+        train_paths, y_train,
+        val_paths, y_val,
+        batch_size=args.batch_size
     )
-    
-    #Step 3B - Extract features
-    F_train, F_val, F_test = extract_all_features(
-        cnn, X_train, X_val, X_test, batch_size=args.batch_size
+
+    # STEP 4: Extract features (STREAMING)
+    F_train, F_val, F_test, y_train, y_val, y_test = extract_all_features(
+        cnn,
+        train_paths, val_paths, test_paths,
+        y_train, y_val, y_test,
+        batch_size=args.batch_size
     )
-    
-    del X_train, X_val, X_test   # free image arrays — features are all we need
 
-    #Step 4: Scale features (fit on train, transform all)
-    F_train_s, F_val_s, F_test_s, scaler = scale_features(F_train, F_val, F_test)
-    del F_train, F_val, F_test   # keep only scaled versions
+    # STEP 5: Scale features
+    F_train_s, F_val_s, F_test_s, scaler = scale_features(
+        F_train, F_val, F_test
+    )
 
-    #Step 5: Train Logistic Regression
+    # STEP 6: Train Logistic Regression
     lr_model = run_lr_training(F_train_s, y_train)
 
-    #Step 6: Evaluate on validation and test sets
-    metrics = run_evaluation(lr_model, F_val_s, y_val, F_test_s, y_test)
+    # STEP 7: Evaluate
+    metrics = run_evaluation(
+        lr_model,
+        F_val_s, y_val,
+        F_test_s, y_test
+    )
 
-    #Step 7: Save LR model, scaler, and text report
-    save_artefacts(cnn, lr_model, scaler, metrics, output_dir=args.output_dir)
+    # STEP 8: Save everything
+    save_artefacts(
+        cnn,
+        lr_model,
+        scaler,
+        metrics,
+        output_dir=args.output_dir
+    )
 
-    #Final summary
+    # FINAL SUMMARY
     mins, secs = divmod(int(time.time() - t_start), 60)
     print(f"\n{'='*65}")
     print(f"  PIPELINE COMPLETE  —  {mins}m {secs}s")
