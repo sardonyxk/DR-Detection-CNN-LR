@@ -47,7 +47,7 @@ def evaluate_model(
     print("  Classification Report")
     print("  " + "-" * 63)
     
-    for line in report_str.splitlines():
+    for line in str(report_str).splitlines():
         print(f"  {line}")
 
     # 3. Confusion matrix — plain text grid, rows = true, columns = predicted
