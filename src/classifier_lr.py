@@ -32,8 +32,7 @@ def train_lr(X_train: np.ndarray, y_train: np.ndarray) -> LogisticRegression:
     """
     
     classifier = LogisticRegression(
-        solver="saga",              # Efficient solver for multinomial logistic regression
-        multi_class="multinomial",  # Single softmax over all 5 classes
+        solver="saga",              # Efficient solver for multinomial logistic regressions
         max_iter=500,               # Raise to 500 if ConvergenceWarning appears
         C=1.0,                      # Inverse L2 regularisation strength
         class_weight="balanced",      # Adjust weights inversely proportional to class frequencies

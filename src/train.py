@@ -507,6 +507,15 @@ def main() -> None:
         F_train, F_val, F_test
     )
 
+    # save features to disk — allows rerunning LR without CNN retraining
+    np.save("saved_model/F_train_s.npy", F_train_s)
+    np.save("saved_model/F_val_s.npy",   F_val_s)
+    np.save("saved_model/F_test_s.npy",  F_test_s)
+    np.save("saved_model/y_train.npy",   y_train)
+    np.save("saved_model/y_val.npy",     y_val)
+    np.save("saved_model/y_test.npy",    y_test)
+    
+    
     # STEP 6: Train Logistic Regression
     lr_model = run_lr_training(F_train_s, y_train)
 
