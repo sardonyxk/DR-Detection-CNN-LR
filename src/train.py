@@ -5,7 +5,6 @@ import argparse
 import warnings
 from pathlib import Path
 
-from matplotlib.pyplot import bar
 import numpy as np
 import cv2
 import joblib
@@ -91,6 +90,9 @@ def load_dataset(data_dir: str) -> tuple[list[Path], np.ndarray]:
         for fpath in files:
             image_paths.append(fpath)
             labels.append(label)
+            
+    if not image_paths:
+        raise RuntimeError("No images found. Check Processed_Dataset folder and run preprocessing.py first.")
 
     labels = np.array(labels, dtype=np.int32)
 
@@ -102,37 +104,41 @@ def load_dataset(data_dir: str) -> tuple[list[Path], np.ndarray]:
 
 # STEP 2 — Train / Validation / Test Split
 
-from sklearn.model_selection import train_test_split
-
 def split_dataset(
     image_paths: list,
     labels: np.ndarray,
     val_size: float = 0.15,
     test_size: float = 0.15,
-):
+)-> tuple:
+    
+    assert len(image_paths) == len(labels), "Paths and labels mismatch!"
+    
     print(f"\n{'='*65}")
     print(f"  STEP 2 — Splitting dataset (PATH-BASED)")
     print(f"{'='*65}")
 
-    # Step 1: train + temp split
+    # Step 1: train + temp
     train_paths, temp_paths, y_train, y_temp = train_test_split(
         image_paths,
         labels,
         test_size=(val_size + test_size),
         stratify=labels,
-        random_state=42
+        random_state=42,
+        shuffle=True
     )
 
-    # Step 2: split temp → val + test
+    # Step 2: val + test split
     val_ratio = val_size / (val_size + test_size)
 
     val_paths, test_paths, y_val, y_test = train_test_split(
         temp_paths,
         y_temp,
-        test_size=(1 - val_ratio),
+        test_size=(1.0 - val_ratio),
         stratify=y_temp,
-        random_state=42
+        random_state=42,
+        shuffle=True
     )
+    n=len(image_paths)
 
     print(f"  Train      : {len(train_paths):>6}")
     print(f"  Validation : {len(val_paths):>6}")
@@ -141,19 +147,61 @@ def split_dataset(
     return train_paths, val_paths, test_paths, y_train, y_val, y_test
 
 #Step 3: CNN training
+
+def _make_tf_dataset(
+    paths: list,
+    labels: np.ndarray,
+    batch_size: int,
+    shuffle: bool = False,
+)-> tf.data.Dataset:
+    str_paths = [str(p) for p in paths]
+    
+    def _load_and_preprocess(path, label):
+        raw = tf.io.read_file(path)
+        image = tf.image.decode_png(raw, channels=3)
+        image = tf.image.resize(image, TARGET_SIZE)
+        image = tf.cast(image, tf.float32) / 255.0
+        return image, label
+    
+    ds=tf.data.Dataset.from_tensor_slices((str_paths, labels))
+    if shuffle:
+        ds=ds.shuffle(buffer_size=1000, seed=RANDOM_SEED)
+    ds = (ds.map(_load_and_preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+          .batch(batch_size)
+          .prefetch(tf.data.AUTOTUNE))
+    return ds
+
+
 def train_cnn(
-    X_train: np.ndarray,
+    train_paths: list,
     y_train: np.ndarray,
-    X_val: np.ndarray,
+    val_paths: list,
     y_val: np.ndarray,
     batch_size: int,
     epochs: int = 20,
 ) -> tf.keras.Model:
 
     print(f"\n{'='*65}")
-    print("  STEP 3 — CNN Training (Adam Optimizer)")
+    print("  STEP 3 — CNN Training (tf.data streaming)")
     print(f"{'='*65}")
+    print(f"  Train batches : {len(train_paths) // batch_size:,}")
+    print(f"  Val   batches : {len(val_paths)   // batch_size:,}")
+    print(f"  Epochs        : {epochs}\n")
+    
+    # streams images from disk — only one batch in RAM at a time
+    train_ds = _make_tf_dataset(train_paths, y_train, batch_size, shuffle=True)
+    val_ds   = _make_tf_dataset(val_paths,   y_val,   batch_size, shuffle=False)
 
+    
+    from sklearn.utils.class_weight import compute_class_weight
+    class_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=np.unique(y_train),
+        y=y_train
+    )
+    class_weight_dict = dict(enumerate(class_weights))
+    print(f"  Class weights : {class_weight_dict}\n")
+    
     #Build CNN feature extractor model
     cnn = build_cnn_feature_extractor(input_shape=INPUT_SHAPE)
     
@@ -171,12 +219,14 @@ def train_cnn(
     )
     #Train
     model.fit(
-        X_train, y_train,
-        validation_data=(X_val, y_val),
-        batch_size=batch_size,
+        train_ds,
+        validation_data=val_ds,
         epochs=epochs,
+        class_weight=class_weight_dict,
         verbose=1
     )
+    
+    
     print("\n  CNN training complete.")
     return cnn
 
@@ -184,47 +234,47 @@ def train_cnn(
 
 
 def _extract_split(
-    cnn: tf.keras.Model,
-    image_paths: list,
-    labels: np.ndarray,
+    cnn:        tf.keras.Model,
+    paths:      list,
+    labels:     np.ndarray,
     batch_size: int,
     split_name: str = "",
 ) -> tuple[np.ndarray, np.ndarray]:
-
-    n = len(image_paths)
-    features = []
-    y_batch = []
-
+    n         = len(paths)
+    features  = []
+    y_out     = []
     n_batches = (n + batch_size - 1) // batch_size
-    tag = f"[{split_name}] " if split_name else ""
-
-    print(f"  {tag}Extracting {n} images in {n_batches} batches ...")
-
+    tag       = f"[{split_name}]" if split_name else ""
+ 
+    print(f"  {tag} {n} images, {n_batches} batch(es) ...")
+ 
     for i in range(n_batches):
         start = i * batch_size
-        end = min(start + batch_size, n)
-
-        batch_paths = image_paths[start:end]
-        batch_labels = labels[start:end]
-
+        end   = min(start + batch_size, n)
+ 
         batch_images = []
-
-        for path in batch_paths:
+        for path in paths[start:end]:
             img = load_image(path)
-            batch_images.append(img)
-
-        batch_images = np.array(batch_images, dtype=np.float32)
-
-        feats = cnn.predict(batch_images, verbose=0)
-
+            if img is not None:
+                batch_images.append(img)
+ 
+        if not batch_images:
+            continue
+ 
+        batch_arr = np.array(batch_images, dtype=np.float32)
+        feats     = cnn.predict(batch_arr, verbose=0)
+ 
         features.append(feats)
-        y_batch.append(batch_labels)
-
-        print(f"{tag}Processed {end}/{n} ({end/n*100:.1f}%)")
-
-    print()
-
-    return np.vstack(features), np.concatenate(y_batch)
+        y_out.append(labels[start:end])
+ 
+        # FIX 1: replaced per-batch print with a single overwriting progress bar
+        done = int(30 * end / n)
+        bar  = "█" * done + "░" * (30 - done)
+        print(f"  {tag} [{bar}] {end/n*100:5.1f}%  ({end}/{n})", end="\r")
+ 
+    print()   # newline to clear the \r line
+ 
+    return np.vstack(features).astype(np.float32), np.concatenate(y_out)
 
 
 def extract_all_features(
@@ -238,13 +288,21 @@ def extract_all_features(
     batch_size: int,
 ):
     print(f"\n{'='*65}")
-    print(f"  STEP 3 — CNN Feature Extraction (STREAMING)")
+    print(f"  STEP 4 — CNN Feature Extraction (STREAMING)")
     print(f"{'='*65}")
+    
+    t0 = time.time()
 
     F_train, y_train = _extract_split(cnn, train_paths, y_train, batch_size, "Train")
     F_val, y_val     = _extract_split(cnn, val_paths,   y_val,   batch_size, "Val")
     F_test, y_test   = _extract_split(cnn, test_paths,  y_test,  batch_size, "Test")
 
+    elapsed = time.time() - t0
+    
+    assert F_train.shape[1] == EXPECTED_FEATURE_DIM, (
+        f"Feature dim {F_train.shape[1]} != expected {EXPECTED_FEATURE_DIM}"
+    )
+    
     print(f"\n  Feature shapes:")
     print(f"  Train: {F_train.shape}")
     print(f"  Val  : {F_val.shape}")
@@ -261,7 +319,7 @@ def scale_features(
     F_test:  np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, StandardScaler]:
     print(f"\n{'='*65}")
-    print(f"  STEP 4 — Feature Scaling (StandardScaler)")
+    print(f"  STEP 5 — Feature Scaling (StandardScaler)")
     print(f"{'='*65}")
     
     #Sanity check
@@ -288,7 +346,7 @@ def run_lr_training(
     y_train: np.ndarray,
 ) -> object:
     print(f"\n{'='*65}")
-    print(f"  STEP 5 — Logistic Regression Training")
+    print(f"  STEP 6 — Logistic Regression Training")
     print(f"{'='*65}")
     print(f"  Training samples : {len(F_train):,}")
     print(f"  Feature dim      : {F_train.shape[1]:,}")
@@ -311,7 +369,7 @@ def run_evaluation(
     y_test:  np.ndarray,
 ) -> dict:
     print(f"\n{'='*65}")
-    print(f"  STEP 6 — Evaluation")
+    print(f"  STEP 7 — Evaluation")
     print(f"{'='*65}")
 
     print("\n  ── Validation Set ──────────────────────────────────────")
@@ -338,12 +396,12 @@ def save_artefacts(
     out.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*65}")
-    print(f"  STEP 7 — Saving Artefacts  →  {out.resolve()}")
+    print(f"  STEP 8 — Saving Artefacts  →  {out.resolve()}")
     print(f"{'='*65}")
 
     #CNN Model
-    cnn_path = out / "cnn.keras"
-    cnn.save(cnn_path)
+    cnn_path = out / "cnn_feature_extractor.keras"
+    cnn.save(str(cnn_path))
     print(f"  [OK] CNN model       → {cnn_path}")
     
     # LR model — uses save_lr() from classifier_lr.py
@@ -397,6 +455,9 @@ def parse_args() -> argparse.Namespace:
         "--batch_size", type=int,   default=32,
         help="CNN feature-extraction batch size (default: 32)",
     )
+    parser.add_argument("--epochs", type=int, default=20,
+        help="Number of epochs for CNN training (default: 20)",
+    )
     return parser.parse_args()
 
 # MAIN
@@ -429,7 +490,8 @@ def main() -> None:
     cnn = train_cnn(
         train_paths, y_train,
         val_paths, y_val,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        epochs=args.epochs
     )
 
     # STEP 4: Extract features (STREAMING)

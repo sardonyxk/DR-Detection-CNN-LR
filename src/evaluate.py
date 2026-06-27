@@ -1,8 +1,8 @@
-
-
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-
 CLASS_NAMES = [
     "No DR",
     "Mild",
@@ -72,3 +72,41 @@ def evaluate_model(
         "classification_report": report_str,
         "confusion_matrix":      cm,
     }
+    
+def plot_confusion_matrix(
+    cm: np.ndarray,
+    title: str = "Confusion Matrix",
+    output_dir: str = "results",
+    filename: str = "confusion_matrix.png"
+)-> None:
+    """Plot the confusion as a heatmap and save it to a file."""
+    
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    save_path = Path(output_dir) / filename
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=CLASS_NAMES,
+        yticklabels=CLASS_NAMES,
+        linewidths=0.5,
+        linecolor="gray",
+        ax=ax
+    )
+    
+    ax.set_title(title, fontsize=14, fontweight="bold", pad=12)
+    ax.set_xlabel("Predicted Label", fontsize=11)
+    ax.set_ylabel("True Label", fontsize=11)
+    plt.xticks(rotation=30, ha="right", fontsize=9)
+    plt.yticks(rotation=0, fontsize=9)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    
+    print(f"Confusion matrix saved to: {save_path}")
+    
